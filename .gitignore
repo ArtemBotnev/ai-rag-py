@@ -1,0 +1,11 @@
+.venv/
+.idea/
+
+__pycache__/
+*.py[cod]
+
+artifacts/*.sqlite
+artifacts/*.json
+artifacts/*.jsonl
+artifacts/*.md
+source

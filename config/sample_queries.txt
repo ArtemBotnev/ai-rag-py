@@ -1,0 +1,4 @@
+How does Now in Android describe its architecture layers?
+How are build variants and flavors used in the app?
+What does the project say about WorkManager sync?
+How are screenshot tests described in the documentation?
