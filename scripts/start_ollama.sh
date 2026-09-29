@@ -16,7 +16,7 @@ if ! command -v ollama >/dev/null 2>&1; then
   exit 1
 fi
 
-echo "Using Ollama model: ${MODEL}"
+echo "Using Ollama embedding model: ${MODEL}"
 
 if curl -fsS "${BASE_URL}/api/tags" >/dev/null 2>&1; then
   echo "Ollama is already running at ${BASE_URL}"
@@ -48,7 +48,7 @@ else
 fi
 
 echo
-echo "Ollama is ready. Run the indexer in another terminal:"
+echo "Ollama embedding model is ready. Run the indexer in another terminal:"
 echo ".venv/bin/python scripts/index_documents.py"
 
 if [[ -n "${OLLAMA_PID:-}" ]]; then

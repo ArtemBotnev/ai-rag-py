@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 
-from rag.models import Token, TokenSlice
+from rag.common.models import Token, TokenSlice
 
 
 TOKEN_RE = re.compile(r"\w+|[^\w\s]", re.MULTILINE)

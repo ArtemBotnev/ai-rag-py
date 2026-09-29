@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from rag.embeddings import HashingEmbeddingClient, OllamaEmbeddingClient
+from rag.inference.embeddings import HashingEmbeddingClient, OllamaEmbeddingClient
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]

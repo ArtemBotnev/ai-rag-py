@@ -15,7 +15,10 @@
 
 ## Подготовка Ollama
 
-По умолчанию используется модель `nomic-embed-text:latest`.
+По умолчанию используются две разные модели:
+
+- embedding-модель `nomic-embed-text:latest`;
+- LLM-модель `llama3.1:8b` для ответов на вопросы.
 
 Установите Ollama системно:
 
@@ -23,18 +26,25 @@
 curl -fsSL https://ollama.com/install.sh | sh
 ```
 
-После этого запустите Ollama:
+Для индексации запустите Ollama и скачайте embedding-модель:
 
 ```bash
 scripts/start_ollama.sh
 ```
 
-Скрипт проверит, что Ollama доступна, запустит `ollama serve` при необходимости и скачает модель.
+Для ответов на вопросы запустите Ollama и скачайте LLM-модель:
 
-Можно переопределить модель:
+```bash
+scripts/start_ollama_llm.sh
+```
+
+Оба скрипта проверяют, что Ollama доступна, запускают `ollama serve` при необходимости и скачивают только свою модель.
+
+Можно переопределить модели:
 
 ```bash
 OLLAMA_MODEL=nomic-embed-text:latest scripts/start_ollama.sh
+OLLAMA_LLM_MODEL=llama3.1:8b scripts/start_ollama_llm.sh
 ```
 
 ## Запуск
@@ -59,28 +69,86 @@ OLLAMA_MODEL=nomic-embed-text:latest scripts/start_ollama.sh
 .venv/bin/python scripts/index_documents.py --embedding-provider hashing
 ```
 
+## Первый RAG-запрос
+
+После индексации можно задать вопрос к базе документов двумя способами.
+
+Сравнить ответ модели без RAG и с RAG:
+
+```bash
+.venv/bin/python scripts/ask.py --compare "Какие архитектурные слои использует Now in Android?"
+```
+
+Только RAG-режим:
+
+```bash
+.venv/bin/python scripts/ask.py --rag "Как в проекте реализована синхронизация данных?"
+```
+
+Только режим без retrieval:
+
+```bash
+.venv/bin/python scripts/ask.py --no-rag "Как устроена модульная структура проекта?"
+```
+
+Полный прогон по 10 контрольным вопросам из `CONTROL_QUESTIONS.md`:
+
+```bash
+.venv/bin/python scripts/ask.py --control
+```
+
+Русский вариант вопросов лежит в `CONTROL_QUESTIONS.ru.md`:
+
+```bash
+.venv/bin/python scripts/ask.py --control --control-questions CONTROL_QUESTIONS.ru.md
+```
+
+Полезные параметры:
+
+```bash
+.venv/bin/python scripts/ask.py --control \
+  --strategy PARAGRAPH_AWARE \
+  --top-k 4 \
+  --ollama-url http://localhost:11434 \
+  --ollama-model nomic-embed-text:latest \
+  --llm-model llama3.1:8b
+```
+
+`scripts/ask.py --control` для каждого вопроса запускает оба режима, считает покрытие ожидаемых фактов, попадание ожидаемых источников, время ответа и токены Ollama (`prompt_eval_count`, `eval_count`).
+
 ## Результаты
 
 - `artifacts/rag-index.sqlite` - локальный SQLite-индекс;
 - `artifacts/rag-chunks.jsonl` - чанки с текстом, метаданными и эмбеддингами;
 - `artifacts/chunking-comparison.json` - машинно-читаемый отчёт;
 - `artifacts/chunking-comparison.md` - отчёт сравнения стратегий.
+- `artifacts/rag-quality-comparison.json` - машинно-читаемый отчёт сравнения RAG/no-RAG;
+- `artifacts/rag-quality-comparison.md` - отчёт по 10 контрольным вопросам.
 
 ## Структура проекта
 
 ```text
 scripts/index_documents.py  # исполняемая точка входа, аналог Kotlin Main.kt
+scripts/ask.py              # вопросы к LLM в режимах с RAG / без RAG / control evaluation
 scripts/start_ollama.sh     # запуск Ollama и загрузка embedding-модели
+scripts/start_ollama_llm.sh # запуск Ollama и загрузка LLM-модели
+CONTROL_QUESTIONS.md        # 10 контрольных вопросов по source/nowinandroid-main
+CONTROL_QUESTIONS.ru.md     # русский вариант контрольных вопросов
 config/sample_queries.txt   # вопросы для Retrieval Samples в отчёте
 rag/cli.py                  # CLI-аргументы и выбор embedding-клиента
-rag/pipeline.py             # orchestration индексации, аналог IndexingPipeline
-rag/document_loader.py      # загрузка Markdown, Kotlin/KTS и PDF
-rag/chunkers.py             # FIXED_SIZE, STRUCTURE_AWARE, PARAGRAPH_AWARE
-rag/embeddings.py           # Ollama embeddings и hashing fallback
-rag/storage.py              # SQLite и JSONL запись
-rag/reporter.py             # comparison report
-rag/models.py               # dataclass-модели
-rag/tokenizer.py            # токенизация и token slices
+rag/common/models.py        # dataclass-модели
+rag/common/tokenizer.py     # токенизация и token slices
+rag/indexing/pipeline.py    # orchestration индексации, аналог IndexingPipeline
+rag/indexing/document_loader.py  # загрузка Markdown, Kotlin/KTS и PDF
+rag/indexing/chunkers.py    # FIXED_SIZE, STRUCTURE_AWARE, PARAGRAPH_AWARE
+rag/indexing/storage.py     # SQLite и JSONL запись
+rag/indexing/reporter.py    # chunking comparison report
+rag/inference/embeddings.py # Ollama embeddings и hashing fallback
+rag/inference/llm.py        # Ollama chat client с токенами и таймингами
+rag/retrieval/retriever.py  # поиск релевантных чанков в SQLite
+rag/qa/agent.py             # режимы WITH_RAG / WITHOUT_RAG
+rag/evaluation/control_questions.py  # парсер контрольных вопросов
+rag/evaluation/evaluation.py         # оценка качества и отчёт RAG/no-RAG
 ```
 
 ## Стратегии chunking

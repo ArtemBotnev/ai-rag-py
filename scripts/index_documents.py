@@ -9,7 +9,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from rag.cli import build_embedding_client, parse_args
-from rag.pipeline import run_pipeline
+from rag.indexing.pipeline import run_pipeline
 
 
 def main() -> None:

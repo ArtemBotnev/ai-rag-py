@@ -3,8 +3,8 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from rag.models import SourceDocument
-from rag.tokenizer import token_count
+from rag.common.models import SourceDocument
+from rag.common.tokenizer import token_count
 
 
 def load_documents(source_root: Path) -> list[SourceDocument]:

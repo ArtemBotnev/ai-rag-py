@@ -7,7 +7,7 @@ import urllib.error
 import urllib.request
 from typing import Iterable, Protocol
 
-from rag.tokenizer import tokenize
+from rag.common.tokenizer import tokenize
 
 
 class EmbeddingClient(Protocol):

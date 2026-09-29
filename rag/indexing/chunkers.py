@@ -3,8 +3,8 @@ from __future__ import annotations
 import re
 from dataclasses import replace
 
-from rag.models import Chunk, ChunkingConfig, SectionUnit, SourceDocument, TokenSlice
-from rag.tokenizer import last_tokens, slice_by_token_range, token_count, tokenize
+from rag.common.models import Chunk, ChunkingConfig, SectionUnit, SourceDocument, TokenSlice
+from rag.common.tokenizer import last_tokens, slice_by_token_range, token_count, tokenize
 
 
 DECLARATION_RE = re.compile(

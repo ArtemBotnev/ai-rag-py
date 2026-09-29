@@ -5,8 +5,8 @@ import re
 from pathlib import Path
 from statistics import median
 
-from rag.embeddings import EmbeddingClient, cosine_similarity
-from rag.models import Chunk, SourceDocument
+from rag.inference.embeddings import EmbeddingClient, cosine_similarity
+from rag.common.models import Chunk, SourceDocument
 
 
 def summarize(strategy: str, documents: list[SourceDocument], chunks: list[Chunk]) -> dict[str, object]:

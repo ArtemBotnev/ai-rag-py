@@ -4,12 +4,12 @@ import argparse
 import time
 from dataclasses import replace
 
-from rag.chunkers import FixedSizeChunker, ParagraphAwareChunker, StructureAwareChunker
-from rag.document_loader import load_documents
-from rag.embeddings import EmbeddingClient
-from rag.models import Chunk, ChunkingConfig
-from rag.reporter import build_query_comparisons, summarize, write_reports
-from rag.storage import write_jsonl, write_sqlite
+from rag.indexing.chunkers import FixedSizeChunker, ParagraphAwareChunker, StructureAwareChunker
+from rag.indexing.document_loader import load_documents
+from rag.inference.embeddings import EmbeddingClient
+from rag.common.models import Chunk, ChunkingConfig
+from rag.indexing.reporter import build_query_comparisons, summarize, write_reports
+from rag.indexing.storage import write_jsonl, write_sqlite
 
 
 def run_pipeline(args: argparse.Namespace, embedding_client: EmbeddingClient) -> dict[str, object]:

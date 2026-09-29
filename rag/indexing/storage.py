@@ -7,7 +7,7 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 
-from rag.models import Chunk
+from rag.common.models import Chunk
 
 
 def write_sqlite(sqlite_path: Path, chunks_by_strategy: dict[str, list[Chunk]]) -> None:
