@@ -71,18 +71,27 @@ OLLAMA_LLM_MODEL=llama3.1:8b scripts/start_ollama_llm.sh
 
 ## Первый RAG-запрос
 
-После индексации можно задать вопрос к базе документов двумя способами.
+После индексации можно задать вопрос к базе документов несколькими способами.
 
-Сравнить ответ модели без RAG и с RAG:
+Сравнить ответ модели без RAG, с baseline RAG и с improved RAG:
 
 ```bash
 .venv/bin/python scripts/ask.py --compare "Какие архитектурные слои использует Now in Android?"
 ```
 
-Только RAG-режим:
+Только RAG-режим. По умолчанию используется `IMPROVED`: query rewrite, расширенный поиск кандидатов, rerank/filter и финальный `top-K-after`.
 
 ```bash
 .venv/bin/python scripts/ask.py --rag "Как в проекте реализована синхронизация данных?"
+```
+
+Baseline retrieval без rewrite и фильтра:
+
+```bash
+.venv/bin/python scripts/ask.py --rag \
+  --retrieval-mode BASELINE \
+  --top-k 4 \
+  "Как в проекте реализована синхронизация данных?"
 ```
 
 Только режим без retrieval:
@@ -108,13 +117,41 @@ OLLAMA_LLM_MODEL=llama3.1:8b scripts/start_ollama_llm.sh
 ```bash
 .venv/bin/python scripts/ask.py --control \
   --strategy PARAGRAPH_AWARE \
-  --top-k 4 \
+  --top-k-before 8 \
+  --top-k-after 4 \
+  --relevance-threshold 0.45 \
+  --query-rewrite on \
   --ollama-url http://localhost:11434 \
   --ollama-model nomic-embed-text:latest \
   --llm-model llama3.1:8b
 ```
 
-`scripts/ask.py --control` для каждого вопроса запускает оба режима, считает покрытие ожидаемых фактов, попадание ожидаемых источников, время ответа и токены Ollama (`prompt_eval_count`, `eval_count`).
+Параметры retrieval:
+
+- `--retrieval-mode BASELINE|IMPROVED` - режим для одиночного `--rag`;
+- `--top-k` - совместимый alias для `--top-k-after`;
+- `--top-k-before` - сколько кандидатов искать до фильтрации в `IMPROVED`;
+- `--top-k-after` - сколько чанков оставить в финальном контексте;
+- `--relevance-threshold` - порог эвристического relevance score;
+- `--query-rewrite on|off` - включить или выключить rewrite вопроса перед retrieval.
+
+`scripts/ask.py --control` для каждого вопроса запускает `WITHOUT_RAG`, `BASELINE_RAG` и `IMPROVED_RAG`, считает покрытие ожидаемых фактов, попадание ожидаемых источников, время ответа и токены Ollama (`prompt_eval_count`, `eval_count`).
+
+## Improved RAG
+
+Baseline RAG использует старую цепочку:
+
+```text
+question -> vector top-K -> question + context -> LLM
+```
+
+Improved RAG добавляет второй этап после поиска:
+
+```text
+question -> query rewrite -> retrieve top-K-before -> rerank/filter -> top-K-after -> question + context -> LLM
+```
+
+Rerank/filter использует cosine similarity, начальный rank кандидата и пересечение терминов вопроса с `file_path`, `title`, `section` и текстом чанка. В отчёт пишутся rewritten query, кандидаты до фильтрации, отброшенные чанки, итоговые чанки, `score` и исходный `similarity`.
 
 ## Результаты
 
@@ -122,8 +159,8 @@ OLLAMA_LLM_MODEL=llama3.1:8b scripts/start_ollama_llm.sh
 - `artifacts/rag-chunks.jsonl` - чанки с текстом, метаданными и эмбеддингами;
 - `artifacts/chunking-comparison.json` - машинно-читаемый отчёт;
 - `artifacts/chunking-comparison.md` - отчёт сравнения стратегий.
-- `artifacts/rag-quality-comparison.json` - машинно-читаемый отчёт сравнения RAG/no-RAG;
-- `artifacts/rag-quality-comparison.md` - отчёт по 10 контрольным вопросам.
+- `artifacts/rag-quality-comparison.json` - машинно-читаемый отчёт сравнения without/baseline/improved RAG;
+- `artifacts/rag-quality-comparison.md` - отчёт по 10 контрольным вопросам с retrieval diagnostics.
 
 ## Структура проекта
 
@@ -145,10 +182,11 @@ rag/indexing/storage.py     # SQLite и JSONL запись
 rag/indexing/reporter.py    # chunking comparison report
 rag/inference/embeddings.py # Ollama embeddings и hashing fallback
 rag/inference/llm.py        # Ollama chat client с токенами и таймингами
-rag/retrieval/retriever.py  # поиск релевантных чанков в SQLite
+rag/retrieval/retriever.py  # baseline/improved retrieval, rerank/filter
 rag/qa/agent.py             # режимы WITH_RAG / WITHOUT_RAG
+rag/qa/query_rewriter.py    # LLM rewrite вопроса в retrieval query
 rag/evaluation/control_questions.py  # парсер контрольных вопросов
-rag/evaluation/evaluation.py         # оценка качества и отчёт RAG/no-RAG
+rag/evaluation/evaluation.py         # оценка качества without/baseline/improved RAG
 ```
 
 ## Стратегии chunking

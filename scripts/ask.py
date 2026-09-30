@@ -14,7 +14,7 @@ from rag.evaluation.control_questions import load_control_questions
 from rag.inference.embeddings import HashingEmbeddingClient, OllamaEmbeddingClient
 from rag.evaluation.evaluation import RagQualityEvaluator, format_duration, write_evaluation_report
 from rag.inference.llm import OllamaChatClient
-from rag.retrieval.retriever import SqliteRagRetriever
+from rag.retrieval.retriever import RetrievalConfig, RetrievalMode, SqliteRagRetriever
 
 
 def main() -> None:
@@ -36,13 +36,18 @@ def parse_args() -> argparse.Namespace:
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--rag", action="store_true", help="Answer using retrieved chunks.")
     mode.add_argument("--no-rag", action="store_true", help="Answer without retrieval.")
-    mode.add_argument("--compare", action="store_true", help="Run both no-RAG and RAG modes for one question.")
-    mode.add_argument("--control", action="store_true", help="Run both modes for all control questions.")
+    mode.add_argument("--compare", action="store_true", help="Run no-RAG, baseline RAG and improved RAG for one question.")
+    mode.add_argument("--control", action="store_true", help="Run no-RAG, baseline RAG and improved RAG for all control questions.")
     parser.add_argument("--sqlite-path", type=Path, default=PROJECT_ROOT / "artifacts" / "rag-index.sqlite")
     parser.add_argument("--output-dir", type=Path, default=PROJECT_ROOT / "artifacts")
     parser.add_argument("--control-questions", type=Path, default=PROJECT_ROOT / "CONTROL_QUESTIONS.md")
     parser.add_argument("--strategy", default="PARAGRAPH_AWARE", choices=("FIXED_SIZE", "STRUCTURE_AWARE", "PARAGRAPH_AWARE"))
-    parser.add_argument("--top-k", type=int, default=4)
+    parser.add_argument("--retrieval-mode", default="IMPROVED", choices=("BASELINE", "IMPROVED"))
+    parser.add_argument("--top-k", type=int, default=None, help="Alias for --top-k-after.")
+    parser.add_argument("--top-k-before", type=int, default=None, help="Candidate count before filtering in improved mode.")
+    parser.add_argument("--top-k-after", type=int, default=None, help="Final context chunk count after filtering.")
+    parser.add_argument("--relevance-threshold", type=float, default=0.45)
+    parser.add_argument("--query-rewrite", default="on", choices=("on", "off", "true", "false", "yes", "no", "1", "0"))
     parser.add_argument("--ollama-url", default="http://localhost:11434")
     parser.add_argument("--ollama-model", default="nomic-embed-text:latest", help="Embedding model for retrieval.")
     parser.add_argument("--ollama-batch-size", type=int, default=16)
@@ -54,8 +59,15 @@ def parse_args() -> argparse.Namespace:
         parser.error("question is required unless --control is used")
     if not args.rag and not args.no_rag and not args.compare and not args.control:
         args.compare = True
-    if args.top_k < 1:
-        parser.error("--top-k must be positive")
+    args.top_k_after = args.top_k_after if args.top_k_after is not None else (args.top_k if args.top_k is not None else 4)
+    args.top_k_before = args.top_k_before if args.top_k_before is not None else max(4, args.top_k_after) * 2
+    args.query_rewrite_enabled = parse_bool(args.query_rewrite)
+    if args.top_k_after < 1:
+        parser.error("--top-k-after/--top-k must be positive")
+    if args.top_k_before < 1:
+        parser.error("--top-k-before must be positive")
+    if not 0.0 <= args.relevance_threshold <= 1.0:
+        parser.error("--relevance-threshold must be between 0 and 1")
     return args
 
 
@@ -63,7 +75,7 @@ def run_ask(args: argparse.Namespace) -> None:
     use_rag = args.rag or not args.no_rag
     agent = build_agent(args, require_retriever=use_rag)
     answer = (
-        agent.answer_with_rag(args.question, top_k=args.top_k)
+        agent.answer_with_rag_config(args.question, active_retrieval_config(args))
         if use_rag
         else agent.answer_without_rag(args.question)
     )
@@ -73,12 +85,16 @@ def run_ask(args: argparse.Namespace) -> None:
 def run_compare(args: argparse.Namespace) -> None:
     agent = build_agent(args, require_retriever=True)
     without_rag = agent.answer_without_rag(args.question)
-    with_rag = agent.answer_with_rag(args.question, top_k=args.top_k)
+    baseline_rag = agent.answer_with_rag_config(args.question, baseline_retrieval_config(args))
+    improved_rag = agent.answer_with_rag_config(args.question, improved_retrieval_config(args))
     print("=== WITHOUT RAG ===")
     print_answer(without_rag)
     print()
-    print("=== WITH RAG ===")
-    print_answer(with_rag)
+    print("=== BASELINE RAG ===")
+    print_answer(baseline_rag)
+    print()
+    print("=== IMPROVED RAG ===")
+    print_answer(improved_rag)
 
 
 def run_control(args: argparse.Namespace) -> None:
@@ -89,14 +105,16 @@ def run_control(args: argparse.Namespace) -> None:
         agent=agent,
         sqlite_path=args.sqlite_path,
         retrieval_strategy=args.strategy,
-        top_k=args.top_k,
+        baseline_config=baseline_retrieval_config(args),
+        improved_config=improved_retrieval_config(args),
     ).evaluate(questions)
     json_path = args.output_dir / "rag-quality-comparison.json"
     markdown_path = args.output_dir / "rag-quality-comparison.md"
     write_evaluation_report(report, json_path, markdown_path)
     print(f"Evaluation report (md): {markdown_path.resolve()}")
     print(f"Evaluation report (json): {json_path.resolve()}")
-    print(f"With RAG wins: {report.summary.with_rag_wins}")
+    print(f"Baseline RAG wins: {report.summary.baseline_rag_wins}")
+    print(f"Improved RAG wins: {report.summary.improved_rag_wins}")
     print(f"Without RAG wins: {report.summary.without_rag_wins}")
     print(f"Ties: {report.summary.ties}")
 
@@ -127,6 +145,37 @@ def build_embedding_client(args: argparse.Namespace) -> OllamaEmbeddingClient | 
     )
 
 
+def active_retrieval_config(args: argparse.Namespace) -> RetrievalConfig:
+    mode = RetrievalMode(args.retrieval_mode)
+    if mode == RetrievalMode.BASELINE:
+        return baseline_retrieval_config(args)
+    return improved_retrieval_config(args)
+
+
+def baseline_retrieval_config(args: argparse.Namespace) -> RetrievalConfig:
+    return RetrievalConfig(
+        mode=RetrievalMode.BASELINE,
+        top_k_before=args.top_k_after,
+        top_k_after=args.top_k_after,
+        relevance_threshold=0.0,
+        enable_query_rewrite=False,
+    )
+
+
+def improved_retrieval_config(args: argparse.Namespace) -> RetrievalConfig:
+    return RetrievalConfig(
+        mode=RetrievalMode.IMPROVED,
+        top_k_before=args.top_k_before,
+        top_k_after=args.top_k_after,
+        relevance_threshold=args.relevance_threshold,
+        enable_query_rewrite=args.query_rewrite_enabled,
+    )
+
+
+def parse_bool(value: str) -> bool:
+    return value.lower() in {"on", "true", "yes", "1"}
+
+
 def print_answer(answer: AgentAnswer) -> None:
     print(f"Mode: {answer.mode.value}")
     print(f"Question: {answer.question}")
@@ -134,15 +183,28 @@ def print_answer(answer: AgentAnswer) -> None:
     print(
         "Metrics: "
         f"total={format_duration(answer.total_duration_ms)}, "
-        f"generation={format_duration(answer.completion.wall_time_ms)}, "
+        f"generation={format_duration(answer.generation_wall_time_ms)}, "
         f"retrieval={format_duration(answer.retrieval_duration_ms)}, "
-        f"tokens={answer.completion.usage.total_tokens} "
-        f"(prompt={answer.completion.usage.prompt_eval_count}, completion={answer.completion.usage.eval_count})"
+        f"tokens={answer.total_tokens} "
+        f"(prompt={answer.prompt_tokens}, completion={answer.completion_tokens})"
     )
     if answer.mode == AnswerMode.WITH_RAG:
+        if answer.retrieval:
+            print(f"Retrieval mode: {answer.retrieval.mode.value}")
+            if answer.retrieval.rewritten_query:
+                print(f"Rewritten query: {answer.retrieval.rewritten_query}")
+            print(
+                "Retrieval config: "
+                f"top_k_before={answer.retrieval.top_k_before}, "
+                f"top_k_after={answer.retrieval.top_k_after}, "
+                f"threshold={answer.retrieval.relevance_threshold}"
+            )
         print("Retrieved chunks:")
         for index, chunk in enumerate(answer.retrieved_chunks, start=1):
-            print(f"{index}. {chunk.file_path} / {chunk.section} / score={chunk.score:.4f}")
+            print(
+                f"{index}. {chunk.file_path} / {chunk.section} / "
+                f"score={chunk.score:.4f} / similarity={chunk.similarity_score:.4f}"
+            )
     print()
     print(answer.answer)
 
