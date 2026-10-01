@@ -50,6 +50,7 @@ fi
 echo
 echo "Ollama LLM model is ready. Run RAG QA in another terminal:"
 echo ".venv/bin/python scripts/ask.py --control --llm-model ${MODEL}"
+echo ".venv/bin/python scripts/ask.py --control-improved --llm-model ${MODEL}"
 
 if [[ -n "${OLLAMA_PID:-}" ]]; then
   echo

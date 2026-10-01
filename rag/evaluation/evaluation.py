@@ -13,6 +13,7 @@ from rag.retrieval.retriever import RetrievalConfig
 @dataclass(frozen=True)
 class RetrievedEvidence:
     chunk_id: str
+    source: str
     file_path: str
     section: str
     score: float
@@ -67,6 +68,15 @@ class ControlQuestionResult:
 
 
 @dataclass(frozen=True)
+class ImprovedControlQuestionResult:
+    id: str
+    question: str
+    expectation: str
+    expected_sources: list[str]
+    improved_rag: AnswerMetrics
+
+
+@dataclass(frozen=True)
 class EvaluationSummary:
     question_count: int
     average_without_rag_coverage: float
@@ -87,6 +97,15 @@ class EvaluationSummary:
 
 
 @dataclass(frozen=True)
+class ImprovedEvaluationSummary:
+    question_count: int
+    average_improved_rag_coverage: float
+    average_improved_rag_source_coverage: float
+    average_improved_rag_time_ms: float
+    average_improved_rag_tokens: float
+
+
+@dataclass(frozen=True)
 class RagEvaluationReport:
     created_at: str
     sqlite_path: str
@@ -98,6 +117,19 @@ class RagEvaluationReport:
     query_rewrite_enabled: bool
     questions: list[ControlQuestionResult]
     summary: EvaluationSummary
+
+
+@dataclass(frozen=True)
+class ImprovedRagEvaluationReport:
+    created_at: str
+    sqlite_path: str
+    retrieval_strategy: str
+    improved_top_k_before: int
+    improved_top_k_after: int
+    improved_relevance_threshold: float
+    query_rewrite_enabled: bool
+    questions: list[ImprovedControlQuestionResult]
+    summary: ImprovedEvaluationSummary
 
 
 class RagQualityEvaluator:
@@ -151,6 +183,34 @@ class RagQualityEvaluator:
             summary=build_summary(results),
         )
 
+    def evaluate_improved_only(self, questions: list[ControlQuestion]) -> ImprovedRagEvaluationReport:
+        results: list[ImprovedControlQuestionResult] = []
+        for question in questions:
+            print(f"Evaluating {question.id}: {question.question}")
+            improved_rag_answer = self.agent.answer_with_rag_config(question.question, self.improved_config)
+            improved_rag = evaluate_answer(question, improved_rag_answer)
+            result = ImprovedControlQuestionResult(
+                id=question.id,
+                question=question.question,
+                expectation=question.expectation,
+                expected_sources=question.expected_sources,
+                improved_rag=improved_rag,
+            )
+            print_improved_intermediate_result(result)
+            results.append(result)
+
+        return ImprovedRagEvaluationReport(
+            created_at=datetime.now(timezone.utc).isoformat(),
+            sqlite_path=str(self.sqlite_path.resolve()),
+            retrieval_strategy=self.retrieval_strategy,
+            improved_top_k_before=self.improved_config.top_k_before,
+            improved_top_k_after=self.improved_config.top_k_after,
+            improved_relevance_threshold=self.improved_config.relevance_threshold,
+            query_rewrite_enabled=self.improved_config.enable_query_rewrite,
+            questions=results,
+            summary=build_improved_summary(results),
+        )
+
 
 def evaluate_answer(question: ControlQuestion, answer: AgentAnswer) -> AnswerMetrics:
     normalized_answer = answer.answer.lower()
@@ -187,6 +247,7 @@ def evaluate_answer(question: ControlQuestion, answer: AgentAnswer) -> AnswerMet
         retrieved_evidence=[
             RetrievedEvidence(
                 chunk_id=chunk.chunk_id,
+                source=chunk.source,
                 file_path=chunk.file_path,
                 section=chunk.section,
                 score=chunk.score,
@@ -209,6 +270,7 @@ def evaluate_answer(question: ControlQuestion, answer: AgentAnswer) -> AnswerMet
                 candidate_evidence=[
                     RetrievedEvidence(
                         chunk_id=chunk.chunk_id,
+                        source=chunk.source,
                         file_path=chunk.file_path,
                         section=chunk.section,
                         score=chunk.score,
@@ -222,6 +284,7 @@ def evaluate_answer(question: ControlQuestion, answer: AgentAnswer) -> AnswerMet
                 discarded_evidence=[
                     RetrievedEvidence(
                         chunk_id=chunk.chunk_id,
+                        source=chunk.source,
                         file_path=chunk.file_path,
                         section=chunk.section,
                         score=chunk.score,
@@ -303,10 +366,30 @@ def build_summary(results: list[ControlQuestionResult]) -> EvaluationSummary:
     )
 
 
+def build_improved_summary(results: list[ImprovedControlQuestionResult]) -> ImprovedEvaluationSummary:
+    return ImprovedEvaluationSummary(
+        question_count=len(results),
+        average_improved_rag_coverage=average([result.improved_rag.expectation_coverage for result in results]),
+        average_improved_rag_source_coverage=average([result.improved_rag.source_coverage or 0.0 for result in results]),
+        average_improved_rag_time_ms=average([result.improved_rag.total_duration_ms for result in results]),
+        average_improved_rag_tokens=average([result.improved_rag.total_tokens for result in results]),
+    )
+
+
 def write_evaluation_report(report: RagEvaluationReport, json_path: Path, markdown_path: Path) -> None:
     json_path.parent.mkdir(parents=True, exist_ok=True)
     json_path.write_text(json.dumps(asdict(report), ensure_ascii=False, indent=2), encoding="utf-8")
     markdown_path.write_text(evaluation_to_markdown(report), encoding="utf-8")
+
+
+def write_improved_evaluation_report(
+    report: ImprovedRagEvaluationReport,
+    json_path: Path,
+    markdown_path: Path,
+) -> None:
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(json.dumps(asdict(report), ensure_ascii=False, indent=2), encoding="utf-8")
+    markdown_path.write_text(improved_evaluation_to_markdown(report), encoding="utf-8")
 
 
 def evaluation_to_markdown(report: RagEvaluationReport) -> str:
@@ -379,6 +462,51 @@ def evaluation_to_markdown(report: RagEvaluationReport) -> str:
     return "\n".join(lines)
 
 
+def improved_evaluation_to_markdown(report: ImprovedRagEvaluationReport) -> str:
+    lines = [
+        "# Improved RAG Quality Report",
+        "",
+        f"- Created at: `{report.created_at}`",
+        f"- SQLite index: `{report.sqlite_path}`",
+        f"- Retrieval strategy: `{report.retrieval_strategy}`",
+        f"- Improved top-K before filter: `{report.improved_top_k_before}`",
+        f"- Improved top-K after filter: `{report.improved_top_k_after}`",
+        f"- Improved relevance threshold: `{report.improved_relevance_threshold:.2f}`",
+        f"- Query rewrite enabled: `{report.query_rewrite_enabled}`",
+        "",
+        "## Summary",
+        "",
+        "| Metric | Value |",
+        "| --- | ---: |",
+        f"| Questions | {report.summary.question_count} |",
+        f"| Avg improved RAG coverage | {report.summary.average_improved_rag_coverage:.2f} |",
+        f"| Avg improved RAG source coverage | {report.summary.average_improved_rag_source_coverage:.2f} |",
+        f"| Avg improved RAG time | {format_duration(report.summary.average_improved_rag_time_ms)} |",
+        f"| Avg improved RAG tokens | {report.summary.average_improved_rag_tokens:.1f} |",
+        "",
+        "## Questions",
+        "",
+    ]
+    for question in report.questions:
+        lines.extend(
+            [
+                f"### {question.id}: {question.question}",
+                "",
+                f"- Expectation: {question.expectation}",
+                f"- Expected sources: {', '.join(question.expected_sources)}",
+                f"- Improved RAG: {format_answer_metrics(question.improved_rag)}",
+                f"- Improved RAG source coverage: {question.improved_rag.source_coverage or 0.0:.2f}",
+                "",
+                "**Answer with improved RAG**",
+                "",
+                question.improved_rag.answer.strip(),
+                "",
+            ]
+        )
+        append_retrieval_section(lines, "Improved retrieval", question.improved_rag.retrieval)
+    return "\n".join(lines)
+
+
 def append_retrieval_section(lines: list[str], title: str, retrieval: RetrievalDiagnostics | None) -> None:
     if retrieval is None:
         return
@@ -416,7 +544,8 @@ def format_evidence(evidence: RetrievedEvidence) -> list[str]:
     source_queries = "/".join(evidence.source_queries) if evidence.source_queries else "-"
     return [
         (
-            f"- `{evidence.file_path}` / `{evidence.section}` / "
+            f"- source=`{evidence.source}` / file=`{evidence.file_path}` / "
+            f"section=`{evidence.section}` / chunk_id=`{evidence.chunk_id}` / "
             f"score={evidence.score:.4f} / similarity={evidence.similarity_score:.4f} / "
             f"matchedTerms={matched_terms} / sourceQueries={source_queries}"
         ),
@@ -444,6 +573,28 @@ def print_intermediate_result(result: ControlQuestionResult) -> None:
         f"sourceCoverage={result.improved_rag.source_coverage or 0.0:.2f}"
     )
     print(f"  verdict: {result.verdict}")
+
+
+def print_improved_intermediate_result(result: ImprovedControlQuestionResult) -> None:
+    print(
+        f"  improved RAG: {format_answer_metrics(result.improved_rag)}, "
+        f"sourceCoverage={result.improved_rag.source_coverage or 0.0:.2f}"
+    )
+    print("  answer:")
+    for line in result.improved_rag.answer.strip().splitlines():
+        print(f"    {line}")
+    if result.improved_rag.retrieved_evidence:
+        print("  retrieved evidence:")
+        for evidence in result.improved_rag.retrieved_evidence:
+            print(
+                "    "
+                f"- source={evidence.source}; section={evidence.section}; "
+                f"chunk_id={evidence.chunk_id}; score={evidence.score:.4f}; "
+                f"similarity={evidence.similarity_score:.4f}"
+            )
+            print(f"      quote: {evidence.preview}")
+    else:
+        print("  retrieved evidence: none")
 
 
 def average(values: list[float | int]) -> float:

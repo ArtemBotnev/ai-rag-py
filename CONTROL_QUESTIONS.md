@@ -1,7 +1,7 @@
 # Control Questions
 
 ## Q1
-Question: What architecture layers does Now in Android use?
+Question: How does this project configure PostgreSQL replication in Android?
 
 Expectation: The answer should mention the data layer, domain layer and UI layer, and note the reactive or unidirectional data flow model.
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
-from rag.inference.llm import ChatCompletion, OllamaChatClient
+from rag.inference.llm import ChatCompletion, ChatUsage, OllamaChatClient
 from rag.qa.query_rewriter import QueryRewriter
 from rag.retrieval.retriever import (
     RetrievalConfig,
@@ -101,10 +101,13 @@ class RagAgent:
             rewrite_result = self.query_rewriter.rewrite(question)
             rewritten_query = rewrite_result.query if rewrite_result else None
         retrieval = self.retriever.search(question, config=retrieval_config, rewritten_query=rewritten_query)
-        completion = self.chat_client.chat(
-            WITH_RAG_SYSTEM_PROMPT,
-            build_rag_prompt(question, retrieval.chunks, rewritten_query=retrieval.rewritten_query),
-        )
+        if should_decline_for_low_relevance(retrieval):
+            completion = build_low_relevance_completion(self.chat_client, retrieval)
+        else:
+            completion = self.chat_client.chat(
+                WITH_RAG_SYSTEM_PROMPT,
+                build_rag_prompt(question, retrieval),
+            )
         return AgentAnswer(
             mode=AnswerMode.WITH_RAG,
             question=question,
@@ -120,24 +123,27 @@ class RagAgent:
 
 def build_rag_prompt(
     question: str,
-    retrieved_chunks: list[RetrievedChunk],
-    rewritten_query: str | None = None,
+    retrieval: RetrievalResult,
 ) -> str:
     lines = [
         "Question:",
         question.strip(),
         "",
     ]
-    if rewritten_query:
-        lines.extend(["Retrieval rewrite:", rewritten_query, ""])
+    if retrieval.rewritten_query:
+        lines.extend(["Retrieval rewrite:", retrieval.rewritten_query, ""])
+    if retrieval.relevance_threshold is not None:
+        lines.extend(["Relevance threshold:", f"{retrieval.relevance_threshold:.4f}", ""])
     lines.extend(["Retrieved context:", ""])
-    if not retrieved_chunks:
+    if not retrieval.chunks:
         lines.append("No context was retrieved.")
-    for index, chunk in enumerate(retrieved_chunks, start=1):
+    for index, chunk in enumerate(retrieval.chunks, start=1):
         lines.extend(
             [
-                f"[{index}] file={chunk.file_path}",
+                f"[{index}] source={chunk.source}",
+                f"file={chunk.file_path}",
                 f"section={chunk.section}",
+                f"chunk_id={chunk.chunk_id}",
                 f"score={chunk.score:.4f}",
                 f"similarity={chunk.similarity_score:.4f}",
                 "content:",
@@ -148,10 +154,69 @@ def build_rag_prompt(
     lines.extend(
         [
             "Answer:",
-            "Use the retrieved context for repository-specific facts. If the context is insufficient, say so.",
+            "Use the retrieved context for repository-specific facts.",
+            "Return exactly these three sections:",
+            "Ответ:",
+            "<direct answer in the user's language>",
+            "",
+            "Источники:",
+            "- source=<source>; section=<section>; chunk_id=<chunk_id>",
+            "",
+            "Цитаты:",
+            "- [<chunk_id>] \"<short exact fragment from the retrieved chunk>\"",
+            "",
+            "Every source must include source, section and chunk_id.",
+            "Every citation must be a short exact fragment copied from a retrieved chunk.",
+            "If the retrieved context does not support the answer, say \"не знаю\" and ask the user to clarify.",
+            "If no retrieved chunk is above the relevance threshold, say \"не знаю\" and ask the user to clarify.",
         ]
     )
     return "\n".join(lines)
+
+
+def should_decline_for_low_relevance(retrieval: RetrievalResult) -> bool:
+    return retrieval.relevance_threshold is not None and not retrieval.chunks
+
+
+def build_low_relevance_completion(chat_client: OllamaChatClient, retrieval: RetrievalResult) -> ChatCompletion:
+    threshold = retrieval.relevance_threshold if retrieval.relevance_threshold is not None else 0.0
+    best_score = max((chunk.score for chunk in retrieval.candidate_chunks), default=0.0)
+    content = "\n".join(
+        [
+            "Ответ:",
+            (
+                "не знаю. В найденных фрагментах нет источника с релевантностью выше порога "
+                f"{threshold:.2f} (лучший score={best_score:.4f}). Уточните вопрос или добавьте больше деталей."
+            ),
+            "",
+            "Источники:",
+            "- нет релевантных источников",
+            "",
+            "Цитаты:",
+            "- нет релевантных цитат",
+        ]
+    )
+    return ChatCompletion(
+        model=synthetic_model_name(chat_client),
+        content=content,
+        usage=ChatUsage(
+            total_duration_ms=0,
+            load_duration_ms=0,
+            prompt_eval_count=0,
+            prompt_eval_duration_ms=0,
+            eval_count=0,
+            eval_duration_ms=0,
+        ),
+        wall_time_ms=0,
+    )
+
+
+def synthetic_model_name(chat_client: OllamaChatClient) -> str:
+    return (
+        getattr(chat_client, "configured_model", None)
+        or getattr(chat_client, "_model", None)
+        or "rag-low-relevance-gate"
+    )
 
 
 NO_RAG_SYSTEM_PROMPT = """
@@ -162,6 +227,8 @@ If you are unsure, say what is uncertain instead of inventing details.
 WITH_RAG_SYSTEM_PROMPT = """
 You answer questions about the indexed repository.
 Use only the retrieved context for repository-specific claims.
-If the context does not support part of the answer, state that directly.
-Mention the source file paths you relied on in the answer when helpful.
+The answer must always contain exactly these sections: Ответ, Источники, Цитаты.
+In Источники list source, section and chunk_id for every chunk used.
+In Цитаты include short exact fragments copied from the retrieved chunks.
+If the context does not support the answer, say "не знаю" and ask the user to clarify.
 """.strip()

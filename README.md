@@ -106,10 +106,17 @@ Baseline retrieval без rewrite и фильтра:
 .venv/bin/python scripts/ask.py --control
 ```
 
+Прогон по контрольным вопросам только в `IMPROVED_RAG` режиме:
+
+```bash
+.venv/bin/python scripts/ask.py --control-improved
+```
+
 Русский вариант вопросов лежит в `CONTROL_QUESTIONS.ru.md`:
 
 ```bash
 .venv/bin/python scripts/ask.py --control --control-questions CONTROL_QUESTIONS.ru.md
+.venv/bin/python scripts/ask.py --control-improved --control-questions CONTROL_QUESTIONS.ru.md
 ```
 
 Полезные параметры:
@@ -137,6 +144,8 @@ Baseline retrieval без rewrite и фильтра:
 
 `scripts/ask.py --control` для каждого вопроса запускает `WITHOUT_RAG`, `BASELINE_RAG` и `IMPROVED_RAG`, считает покрытие ожидаемых фактов, попадание ожидаемых источников, время ответа и токены Ollama (`prompt_eval_count`, `eval_count`).
 
+`scripts/ask.py --control-improved` запускает только `IMPROVED_RAG` для всех контрольных вопросов, печатает в консоль метрики, структурированный ответ и retrieved evidence по каждому вопросу, а также пишет отдельный отчёт без сравнительных прогонов baseline/no-RAG.
+
 ## Improved RAG
 
 Baseline RAG использует старую цепочку:
@@ -153,6 +162,21 @@ question -> query rewrite -> retrieve top-K-before -> rerank/filter -> top-K-aft
 
 Rerank/filter использует cosine similarity, начальный rank кандидата и пересечение терминов вопроса с `file_path`, `title`, `section` и текстом чанка. В отчёт пишутся rewritten query, кандидаты до фильтрации, отброшенные чанки, итоговые чанки, `score` и исходный `similarity`.
 
+RAG-ответы имеют обязательный формат:
+
+```text
+Ответ:
+...
+
+Источники:
+- source=<source>; section=<section>; chunk_id=<chunk_id>
+
+Цитаты:
+- [<chunk_id>] "<фрагмент из найденного чанка>"
+```
+
+Если после фильтрации нет чанков с релевантностью выше `--relevance-threshold`, агент не вызывает генерацию ответа по пустому контексту: он возвращает `не знаю`, указывает, что релевантных источников и цитат нет, и просит уточнить вопрос.
+
 ## Результаты
 
 - `artifacts/rag-index.sqlite` - локальный SQLite-индекс;
@@ -161,6 +185,8 @@ Rerank/filter использует cosine similarity, начальный rank к
 - `artifacts/chunking-comparison.md` - отчёт сравнения стратегий.
 - `artifacts/rag-quality-comparison.json` - машинно-читаемый отчёт сравнения without/baseline/improved RAG;
 - `artifacts/rag-quality-comparison.md` - отчёт по 10 контрольным вопросам с retrieval diagnostics.
+- `artifacts/rag-quality-improved.json` - машинно-читаемый отчёт только по improved RAG;
+- `artifacts/rag-quality-improved.md` - отчёт по контрольным вопросам только для improved RAG.
 
 ## Структура проекта
 

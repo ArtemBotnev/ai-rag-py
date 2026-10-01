@@ -12,7 +12,12 @@ if str(PROJECT_ROOT) not in sys.path:
 from rag.qa.agent import AgentAnswer, AnswerMode, RagAgent
 from rag.evaluation.control_questions import load_control_questions
 from rag.inference.embeddings import HashingEmbeddingClient, OllamaEmbeddingClient
-from rag.evaluation.evaluation import RagQualityEvaluator, format_duration, write_evaluation_report
+from rag.evaluation.evaluation import (
+    RagQualityEvaluator,
+    format_duration,
+    write_evaluation_report,
+    write_improved_evaluation_report,
+)
 from rag.inference.llm import OllamaChatClient
 from rag.retrieval.retriever import RetrievalConfig, RetrievalMode, SqliteRagRetriever
 
@@ -22,6 +27,8 @@ def main() -> None:
     try:
         if args.control:
             run_control(args)
+        elif args.control_improved:
+            run_control_improved(args)
         elif args.compare:
             run_compare(args)
         else:
@@ -38,6 +45,7 @@ def parse_args() -> argparse.Namespace:
     mode.add_argument("--no-rag", action="store_true", help="Answer without retrieval.")
     mode.add_argument("--compare", action="store_true", help="Run no-RAG, baseline RAG and improved RAG for one question.")
     mode.add_argument("--control", action="store_true", help="Run no-RAG, baseline RAG and improved RAG for all control questions.")
+    mode.add_argument("--control-improved", action="store_true", help="Run improved RAG only for all control questions.")
     parser.add_argument("--sqlite-path", type=Path, default=PROJECT_ROOT / "artifacts" / "rag-index.sqlite")
     parser.add_argument("--output-dir", type=Path, default=PROJECT_ROOT / "artifacts")
     parser.add_argument("--control-questions", type=Path, default=PROJECT_ROOT / "CONTROL_QUESTIONS.md")
@@ -55,9 +63,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--llm-model", default=None, help="Ollama chat model. If omitted, the first non-embedding model is used.")
     parser.add_argument("--chat-timeout-seconds", type=int, default=900)
     args = parser.parse_args()
-    if not args.control and not args.question:
-        parser.error("question is required unless --control is used")
-    if not args.rag and not args.no_rag and not args.compare and not args.control:
+    if not args.control and not args.control_improved and not args.question:
+        parser.error("question is required unless --control or --control-improved is used")
+    if not args.rag and not args.no_rag and not args.compare and not args.control and not args.control_improved:
         args.compare = True
     args.top_k_after = args.top_k_after if args.top_k_after is not None else (args.top_k if args.top_k is not None else 4)
     args.top_k_before = args.top_k_before if args.top_k_before is not None else max(4, args.top_k_after) * 2
@@ -117,6 +125,28 @@ def run_control(args: argparse.Namespace) -> None:
     print(f"Improved RAG wins: {report.summary.improved_rag_wins}")
     print(f"Without RAG wins: {report.summary.without_rag_wins}")
     print(f"Ties: {report.summary.ties}")
+
+
+def run_control_improved(args: argparse.Namespace) -> None:
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    questions = load_control_questions(args.control_questions)
+    agent = build_agent(args, require_retriever=True)
+    report = RagQualityEvaluator(
+        agent=agent,
+        sqlite_path=args.sqlite_path,
+        retrieval_strategy=args.strategy,
+        baseline_config=baseline_retrieval_config(args),
+        improved_config=improved_retrieval_config(args),
+    ).evaluate_improved_only(questions)
+    json_path = args.output_dir / "rag-quality-improved.json"
+    markdown_path = args.output_dir / "rag-quality-improved.md"
+    write_improved_evaluation_report(report, json_path, markdown_path)
+    print(f"Improved RAG report (md): {markdown_path.resolve()}")
+    print(f"Improved RAG report (json): {json_path.resolve()}")
+    print(f"Average coverage: {report.summary.average_improved_rag_coverage:.2f}")
+    print(f"Average source coverage: {report.summary.average_improved_rag_source_coverage:.2f}")
+    print(f"Average time: {format_duration(report.summary.average_improved_rag_time_ms)}")
+    print(f"Average tokens: {report.summary.average_improved_rag_tokens:.1f}")
 
 
 def build_agent(args: argparse.Namespace, require_retriever: bool) -> RagAgent:
@@ -202,7 +232,8 @@ def print_answer(answer: AgentAnswer) -> None:
         print("Retrieved chunks:")
         for index, chunk in enumerate(answer.retrieved_chunks, start=1):
             print(
-                f"{index}. {chunk.file_path} / {chunk.section} / "
+                f"{index}. source={chunk.source} / file={chunk.file_path} / "
+                f"section={chunk.section} / chunk_id={chunk.chunk_id} / "
                 f"score={chunk.score:.4f} / similarity={chunk.similarity_score:.4f}"
             )
     print()

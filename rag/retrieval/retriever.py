@@ -43,6 +43,7 @@ class IndexedChunk:
 @dataclass(frozen=True)
 class RetrievedChunk:
     chunk_id: str
+    source: str
     file_path: str
     section: str
     title: str
@@ -326,6 +327,7 @@ def indexed_to_retrieved(
 ) -> RetrievedChunk:
     return RetrievedChunk(
         chunk_id=chunk.chunk_id,
+        source=chunk.source,
         file_path=chunk.file_path,
         section=chunk.section,
         title=chunk.title,
