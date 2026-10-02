@@ -133,6 +133,57 @@ Baseline retrieval без rewrite и фильтра:
   --llm-model llama3.1:8b
 ```
 
+## Мини-чат с RAG и памятью задачи
+
+CLI-чат хранит историю текущего диалога, обновляет память задачи и для каждого нового сообщения снова ищет контекст в SQLite-индексе через RAG.
+
+Интерактивный запуск:
+
+```bash
+.venv/bin/python scripts/chat.py
+```
+
+Сохранить и продолжить историю через JSON:
+
+```bash
+.venv/bin/python scripts/chat.py --history-file artifacts/chat-history.json
+```
+
+Прогон длинного сценария:
+
+```bash
+.venv/bin/python scripts/chat.py --scenario scenarios/chat_architecture.md \
+  --history-file artifacts/chat-architecture-history.json
+```
+
+Второй сценарий проверки:
+
+```bash
+.venv/bin/python scripts/chat.py --scenario scenarios/chat_feature.md \
+  --history-file artifacts/chat-feature-history.json
+```
+
+Память задачи содержит:
+
+- цель диалога;
+- уточнения пользователя;
+- зафиксированные ограничения и термины.
+
+Перед retrieval чат маршрутизирует сообщения:
+
+- `SMALL_TALK` - приветствие, благодарность, короткое подтверждение;
+- `TASK_SETUP` - постановка цели диалога;
+- `CONSTRAINT_UPDATE` - ограничения вроде `отвечай кратко`;
+- `CLARIFICATION` - уточнение терминов или контекста;
+- `RAG_QUESTION` - вопрос, для которого нужен поиск по индексу;
+- `OUT_OF_SCOPE` - явно вне текущего индекса.
+
+RAG-поиск запускается только для `RAG_QUESTION`; остальные типы обновляют память задачи и возвращают локальный структурированный ответ.
+
+Поверх маршрутизатора работает dialogue agent. Он выбирает действие для хода: локальный ответ, обновление памяти, обычный RAG-ответ или `SYNTHESIZE_WITH_RAG`. Для итоговых запросов вроде `вернись к цели и перечисли пошаговый план` retrieval query строится из цели, уточнений, ограничений, терминов и последних ходов истории.
+
+На каждом ходе чат печатает память задачи, retrieval query, найденные источники и структурированный RAG-ответ с блоками `Ответ`, `Источники`, `Цитаты`.
+
 Параметры retrieval:
 
 - `--retrieval-mode BASELINE|IMPROVED` - режим для одиночного `--rag`;
@@ -193,11 +244,14 @@ RAG-ответы имеют обязательный формат:
 ```text
 scripts/index_documents.py  # исполняемая точка входа, аналог Kotlin Main.kt
 scripts/ask.py              # вопросы к LLM в режимах с RAG / без RAG / control evaluation
+scripts/chat.py             # мини-чат с RAG, историей и памятью задачи
 scripts/start_ollama.sh     # запуск Ollama и загрузка embedding-модели
 scripts/start_ollama_llm.sh # запуск Ollama и загрузка LLM-модели
 CONTROL_QUESTIONS.md        # 10 контрольных вопросов по source/nowinandroid-main
 CONTROL_QUESTIONS.ru.md     # русский вариант контрольных вопросов
 config/sample_queries.txt   # вопросы для Retrieval Samples в отчёте
+scenarios/chat_architecture.md  # длинный сценарий чата про архитектуру
+scenarios/chat_feature.md       # длинный сценарий чата про добавление фичи
 rag/cli.py                  # CLI-аргументы и выбор embedding-клиента
 rag/common/models.py        # dataclass-модели
 rag/common/tokenizer.py     # токенизация и token slices
@@ -210,6 +264,10 @@ rag/inference/embeddings.py # Ollama embeddings и hashing fallback
 rag/inference/llm.py        # Ollama chat client с токенами и таймингами
 rag/retrieval/retriever.py  # baseline/improved retrieval, rerank/filter
 rag/qa/agent.py             # режимы WITH_RAG / WITHOUT_RAG
+rag/qa/chat.py              # история диалога, task state и сценарии мини-чата
+rag/qa/chat_utils.py        # общие string helper-ы для чата
+rag/qa/dialogue_agent.py    # action policy для локальных, RAG и synthesis ходов
+rag/qa/message_router.py    # rule-based маршрутизация сообщений чата
 rag/qa/query_rewriter.py    # LLM rewrite вопроса в retrieval query
 rag/evaluation/control_questions.py  # парсер контрольных вопросов
 rag/evaluation/evaluation.py         # оценка качества without/baseline/improved RAG

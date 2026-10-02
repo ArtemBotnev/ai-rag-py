@@ -92,21 +92,28 @@ class RagAgent:
             ),
         )
 
-    def answer_with_rag_config(self, question: str, retrieval_config: RetrievalConfig) -> AgentAnswer:
+    def answer_with_rag_config(
+        self,
+        question: str,
+        retrieval_config: RetrievalConfig,
+        retrieval_question: str | None = None,
+        prompt_context: str | None = None,
+    ) -> AgentAnswer:
         if self.retriever is None:
             raise RuntimeError("RAG mode requires a retriever.")
+        search_question = (retrieval_question or question).strip()
         rewrite_result = None
         rewritten_query = None
         if retrieval_config.mode == RetrievalMode.IMPROVED and retrieval_config.enable_query_rewrite:
-            rewrite_result = self.query_rewriter.rewrite(question)
+            rewrite_result = self.query_rewriter.rewrite(search_question)
             rewritten_query = rewrite_result.query if rewrite_result else None
-        retrieval = self.retriever.search(question, config=retrieval_config, rewritten_query=rewritten_query)
+        retrieval = self.retriever.search(search_question, config=retrieval_config, rewritten_query=rewritten_query)
         if should_decline_for_low_relevance(retrieval):
             completion = build_low_relevance_completion(self.chat_client, retrieval)
         else:
             completion = self.chat_client.chat(
                 WITH_RAG_SYSTEM_PROMPT,
-                build_rag_prompt(question, retrieval),
+                build_rag_prompt(question, retrieval, prompt_context=prompt_context),
             )
         return AgentAnswer(
             mode=AnswerMode.WITH_RAG,
@@ -124,12 +131,15 @@ class RagAgent:
 def build_rag_prompt(
     question: str,
     retrieval: RetrievalResult,
+    prompt_context: str | None = None,
 ) -> str:
     lines = [
         "Question:",
         question.strip(),
         "",
     ]
+    if prompt_context:
+        lines.extend(["Conversation and task state:", prompt_context.strip(), ""])
     if retrieval.rewritten_query:
         lines.extend(["Retrieval rewrite:", retrieval.rewritten_query, ""])
     if retrieval.relevance_threshold is not None:

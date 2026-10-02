@@ -9,3 +9,4 @@ artifacts/*.json
 artifacts/*.jsonl
 artifacts/*.md
 source
+scenarios
