@@ -101,6 +101,95 @@ class OllamaChatClient:
         return RuntimeError(f"{prefix}. Start Ollama and make sure the model is available at {self.base_url}.")
 
 
+class OpenAIResponsesChatClient:
+    def __init__(
+        self,
+        api_key: str | None = None,
+        model: str | None = None,
+        base_url: str = "https://api.openai.com/v1",
+        timeout_seconds: int = 900,
+    ) -> None:
+        self.api_key = api_key or os.getenv("OPENAI_API_KEY")
+        self.model = model or os.getenv("OPENAI_MODEL", "gpt-5-mini")
+        self.base_url = base_url.rstrip("/")
+        self.timeout_seconds = timeout_seconds
+
+    def chat(self, system_prompt: str | None, user_prompt: str) -> ChatCompletion:
+        if not self.api_key:
+            raise RuntimeError("OpenAI API key is required. Set OPENAI_API_KEY or pass --openai-api-key.")
+
+        payload_dict = {
+            "model": self.model,
+            "input": user_prompt,
+            "store": False,
+        }
+        if system_prompt:
+            payload_dict["instructions"] = system_prompt
+        payload = json.dumps(payload_dict).encode("utf-8")
+        request = urllib.request.Request(
+            f"{self.base_url}/responses",
+            data=payload,
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        started = time.perf_counter()
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
+                response_payload = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            error_body = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"OpenAI response request failed: HTTP {exc.code}: {error_body}") from exc
+        except urllib.error.URLError as exc:
+            raise RuntimeError("OpenAI response request failed.") from exc
+
+        content = extract_openai_output_text(response_payload)
+        if not content:
+            raise RuntimeError(f"OpenAI response does not contain output text: {response_payload}")
+        usage = response_payload.get("usage", {})
+        prompt_tokens = int(usage.get("input_tokens", 0) or 0)
+        completion_tokens = int(usage.get("output_tokens", 0) or 0)
+        return ChatCompletion(
+            model=str(response_payload.get("model") or self.model),
+            content=content.strip(),
+            usage=ChatUsage(
+                total_duration_ms=0,
+                load_duration_ms=0,
+                prompt_eval_count=prompt_tokens,
+                prompt_eval_duration_ms=0,
+                eval_count=completion_tokens,
+                eval_duration_ms=0,
+            ),
+            wall_time_ms=int((time.perf_counter() - started) * 1000),
+        )
+
+
+def extract_openai_output_text(payload: dict[str, object]) -> str:
+    output_text = payload.get("output_text")
+    if isinstance(output_text, str):
+        return output_text
+
+    parts: list[str] = []
+    output = payload.get("output")
+    if not isinstance(output, list):
+        return ""
+    for item in output:
+        if not isinstance(item, dict):
+            continue
+        content = item.get("content")
+        if not isinstance(content, list):
+            continue
+        for content_item in content:
+            if not isinstance(content_item, dict):
+                continue
+            text = content_item.get("text")
+            if isinstance(text, str):
+                parts.append(text)
+    return "\n".join(parts)
+
+
 def nanoseconds_to_ms(value: object) -> int:
     try:
         return int(value) // 1_000_000

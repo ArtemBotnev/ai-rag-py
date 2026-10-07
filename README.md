@@ -184,6 +184,42 @@ RAG-поиск запускается только для `RAG_QUESTION`; ост
 
 На каждом ходе чат печатает память задачи, retrieval query, найденные источники и структурированный RAG-ответ с блоками `Ответ`, `Источники`, `Цитаты`.
 
+## Сравнение OpenAI и локальной LLM поверх RAG
+
+Отдельный чат запускает один retrieval по SQLite-индексу, затем последовательно отдаёт одинаковый найденный контекст в OpenAI и локальную Ollama LLM. В выводе остаются только ответ каждой модели и время генерации.
+Каждое сообщение обрабатывается как самостоятельный RAG-вопрос без памяти диалога.
+
+Перед запуском подготовьте локальную LLM:
+
+```bash
+scripts/start_ollama_llm.sh
+```
+
+Перед запуском `OPENAI_API_KEY` должен быть уже задан в окружении. Скрипты не принимают ключ как аргумент.
+
+```bash
+scripts/run_llm_compare_chat.sh
+```
+
+Одиночный вопрос без интерактивного режима:
+
+```bash
+scripts/run_llm_compare_chat.sh "Какие архитектурные слои используются?"
+```
+
+Прогнать сценарий:
+
+```bash
+scripts/run_llm_compare_chat.sh --scenario scenarios/chat_feature.md
+```
+
+Модели можно переопределить через env или параметры:
+
+```bash
+OPENAI_MODEL=gpt-5-mini OLLAMA_LLM_MODEL=llama3.1:8b \
+  scripts/run_llm_compare_chat.sh --llm-model llama3.1:8b
+```
+
 Параметры retrieval:
 
 - `--retrieval-mode BASELINE|IMPROVED` - режим для одиночного `--rag`;
@@ -245,6 +281,8 @@ RAG-ответы имеют обязательный формат:
 scripts/index_documents.py  # исполняемая точка входа, аналог Kotlin Main.kt
 scripts/ask.py              # вопросы к LLM в режимах с RAG / без RAG / control evaluation
 scripts/chat.py             # мини-чат с RAG, историей и памятью задачи
+scripts/chat_llm_compare.py # сравнение OpenAI и Ollama на одном RAG-контексте
+scripts/run_llm_compare_chat.sh # bash-запуск сравнения OpenAI/Ollama
 scripts/start_ollama.sh     # запуск Ollama и загрузка embedding-модели
 scripts/start_ollama_llm.sh # запуск Ollama и загрузка LLM-модели
 CONTROL_QUESTIONS.md        # 10 контрольных вопросов по source/nowinandroid-main
